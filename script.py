@@ -36,7 +36,7 @@ def scrapData(limit, dx_labels):
     """
     
     first_row = [['image_url', 'dx_label', 'lesion_label']]
-    with open('result.csv', 'w') as f:
+    with open('result.csv', 'w', newline='') as f:
         a = csv.writer(f)
         a.writerows(first_row)
         for dx_label in dx_labels:
@@ -51,33 +51,33 @@ def scrapData(limit, dx_labels):
                 search_result_dict = parserSearchPage(dx_label, str(images_page))
                 images_page += 1
                 for data_image_id, image_url in search_result_dict.items():
-                        if data_image_id in data_image_ids:
-                            continue
-                        data_image_ids.append(data_image_id)
-                        # get and parser case overview page.
-                        data = parserCaseOverviewPage(dx_label, data_image_id, image_url)
-                            a.writerows(data)
-                            count += 1
-                        if count > limit:
-                            break
+                    if data_image_id in data_image_ids:
+                        continue
+                    data_image_ids.append(data_image_id)
+                    # get and parser case overview page.
+                    data = parserCaseOverviewPage(dx_label, data_image_id, image_url)
+                    if data:
+                        a.writerows(data)
+                        count += 1
+                    if count > limit:
+                        break
     f.close()
 
-def getPage(url, fileName, urlParams={}):
-    """ Help function to get page html text a url with given urlParams
-        Write the html page into a file with given fileName
-    """
+def getHtmlPageSoup(url, urlParams={}):
     try:
         r = requests.get(url, params=urlParams)
-        query_result_file = open(fileName, "w")
-        query_result_file.write(r.text)
-        query_result_file.close
+        return BeautifulSoup(r.content, "html5lib")
     except requests.exceptions.RequestException as e:
         print(e)
         sys.exit(1)
 
 def validImageUrl(image_url):
-    r = requests.head(image_url)
-    return r.status_code == requests.codes.ok
+    try:
+        r = requests.head(image_url)
+        return r.status_code == requests.codes.ok
+    except requests.exceptions.RequestException as e:
+        print(e)
+        sys.exit(1)
 
 # Parser search result html page:
 # 1. The 'ul' tag with class search-list contains list 'li' tags
@@ -109,19 +109,10 @@ def validImageUrl(image_url):
 def parserSearchPage(dx_label, images_page):
 
     result_dict = {}
-    # Grab the search result html page with given dx_label, images_page。 write into local
-    # The file name format will be "query_result_"+dx_label+".html"
-    search_file_name = "query_result_" + dx_label + "_" + images_page + ".html"
+    # Grab the search result html page soup with given dx_label, images_page.
+    search_result_soup = getHtmlPageSoup(search_url_base, {'imagesPage': images_page, 'q': dx_label})
 
-    # Can comment out this line if have files locally
-    getPage(search_url_base, search_file_name, {'imagesPage': images_page, 'q': dx_label})
-
-    # Read the local search result file we created.
-    search_result_file = open(search_file_name, "r")
-    search_result_soup = BeautifulSoup(search_result_file.read(), "html5lib")
-    search_result_file.close()
-    summary_list = search_result_soup.find('ul', class_="search-list").find_all('li')
-    
+    summary_list = search_result_soup.find('ul', class_="search-list").find_all('li') 
     for li in summary_list:
         data_image_id = li.find('a')['href'].split('/')[3]
         img_name = li.find('img')['src'].split('/')[3].split('?')[0]
@@ -140,27 +131,18 @@ def parserSearchPage(dx_label, images_page):
 # and list infomations for this image, i.e. Patient case no. Patient details, etc.
 # For our task, diagnosis (dx_label) and Primary Lesions are the infomations we needed.
 # 
-# 2. We can only search the given data_image_id's case-summary. In order to reduce the get call 
-# requesting same case overview page multiple times, we parser all images. 
-#
-# 3. The image in this case overview page could be some other diagnosis result (dx_label). i.e.
-# https://www.dermquest.com/image-library/image/5044bfd1c97267166cd6703f 
-# So it is needed to validate diagnosis when we gather lesions infomation.
+# 2. We search the given data_image_id's case-summary here. 
+# However, We can improve the script here to reduce the total get call requesting case overview page
+# by parser all images in the case overview page.
+# One thing to note, all images in this case overview page could have other diagnosis result (dx_label). 
+# i.e. https://www.dermquest.com/image-library/image/5044bfd1c97267166cd6703f 
+# So it is needed to validate diagnosis again when we gather lesions infomation for given image.
+# Mark this as TODO 
 def parserCaseOverviewPage(dx_label, data_image_id, image_url):
 
-    # Grab the case overview html page by given data_image_id. 
-    # Write into local. The file name format will be 'dx_label'_'data_image_id'.html.
-    # Whitespace in dx_label will be replaced by '_' as well.
-    case_overview_file_name = dx_label.replace(" ", "_") + "_"+ data_image_id + ".html"   
+    # Grab the case overview html page soup by given data_image_id. 
     case_overview_url =  summary_url_base + data_image_id
-
-    # Can comment out this line if have files locally             
-    getPage(case_overview_url, case_overview_file_name)
-
-    # Read the local case overview file we created.
-    case_overview_file = open(case_overview_file_name, "r")
-    case_overview_soup = BeautifulSoup(case_overview_file.read(), "html5lib")
-    case_overview_file.close()
+    case_overview_soup = getHtmlPageSoup(case_overview_url)
 
     # Gather and format diagnosis result into a string
     case_overview_tag = case_overview_soup.find('span', attrs={"data-image-id" : data_image_id})
