@@ -12,11 +12,10 @@
 ############################################################################################
 
 import argparse
+import csv
 import re
 import requests
 import sys
-import os
-import csv
 from bs4 import BeautifulSoup
 
 # Global variables. Some base url that applied for all dx_labels.
@@ -27,14 +26,14 @@ summary_url_base = "https://www.dermquest.com/image-library/image/"
 image_url_bases= "https://www.dermquest.com/imagelibrary/large/"
 
 def scrapData(limit, dx_labels):
-    """ Scarp limit number of images data for given dx_labels.
-        Report the image_url, dx_label and lesion_label into file result.csv
-    
-    Arguments:
-        limit {integer} -- the required number of images for each diagnosis result
-        dx_labels {list} -- the diagnosis results you want to scrap
     """
-    
+    Scarp limit number of images data for given dx_labels.
+    Report the image_url, dx_label and lesion_label into file result.csv
+
+    :param limit: the required number of images for each diagnosis result
+    :param dx_labels: the diagnosis results you want to scrap
+    :return:
+    """
     first_row = [['image_url', 'dx_label', 'lesion_label']]
     with open('result.csv', 'w', newline='') as f:
         a = csv.writer(f)
@@ -64,6 +63,12 @@ def scrapData(limit, dx_labels):
     f.close()
 
 def getHtmlPageSoup(url, urlParams={}):
+    """
+    Help Function
+    :param url: the url for get reuqest call
+    :param urlParams: Optional Param. url param to compose url
+    :return: BeautifulSoup Object for given html page
+    """
     try:
         r = requests.get(url, params=urlParams)
         return BeautifulSoup(r.content, "html5lib")
@@ -72,6 +77,11 @@ def getHtmlPageSoup(url, urlParams={}):
         sys.exit(1)
 
 def validImageUrl(image_url):
+    """
+    Help Function
+    :param image_url: the image url to validate
+    :return: True if valid image url. Otherwise, false
+    """
     try:
         r = requests.head(image_url)
         return r.status_code == requests.codes.ok
@@ -79,35 +89,41 @@ def validImageUrl(image_url):
         print(e)
         sys.exit(1)
 
-# Parser search result html page:
-# 1. The 'ul' tag with class search-list contains list 'li' tags
-# i.e.  
-# <ul class="search-list">
-# <li>
-#     <img src="/imagelibrary/thumb/10481-DSC00191.JPG" alt="" height="49px" class="imgLeft">
-#     <h3><a href="/image-library/image/5044bfd1c97267166cd67491">Case 10911</a></h3>
-#     <p>
-#         nodulo cystic acne vulgaris
-#     </p>
-#     <div style="clear:both;"></div>
-# </li>
-# ....
-#
-# For next 'li' tag's children, we can extract the data-image-id (5044bfd1c97267166cd67491) from 'a' tag.
-# This is useful for case overview page parser.
-# By concatnating with summary_url_base, we can form case overview url
-#
-# 2. Every 'li' tag has child 'img' tag which contains the image name. 
-# It can be used to form the large image url.
-# We can extract the image file name (10481-DSC00191.JPG)
-#
-# 3. We need to validate image_url. Add this image info unless it is a valid image url.
-#
-# 4. Usually, the 'p' tag has the diagnosis result for the image. So, we can validate it.
-# It is possible that search result diagnosis doesn't match dx_label because of other 
-# infos matching dx_label. We drop the image in this case.
-def parserSearchPage(dx_label, images_page):
 
+def parserSearchPage(dx_label, images_page):
+    """
+    Parser search result html page:
+    1. The 'ul' tag with class search-list contains list 'li' tags
+    i.e.
+    <ul class="search-list">
+    <li>
+        <img src="/imagelibrary/thumb/10481-DSC00191.JPG" alt="" height="49px" class="imgLeft">
+        <h3><a href="/image-library/image/5044bfd1c97267166cd67491">Case 10911</a></h3>
+        <p>
+            nodulo cystic acne vulgaris
+        </p>
+        <div style="clear:both;"></div>
+    </li>
+    ....
+
+    For next 'li' tag's children, we can extract the data-image-id (5044bfd1c97267166cd67491) from 'a' tag.
+    This is useful for case overview page parser.
+    By concatnating with summary_url_base, we can form case overview url
+
+    2. Every 'li' tag has child 'img' tag which contains the image name.
+    It can be used to form the large image url.
+    We can extract the image file name (10481-DSC00191.JPG)
+
+    3. We need to validate image_url. Add this image info unless it is a valid image url.
+
+    4. Usually, the 'p' tag has the diagnosis result for the image. So, we can validate it.
+    It is possible that search result diagnosis doesn't match dx_label because of other
+    infos matching dx_label. We drop the image in this case.
+
+    :param dx_label:
+    :param images_page: Search Page number, used for url params
+    :return: Dictionary object which contains valid data_image_id map with valid image url
+    """
     result_dict = {}
     # Grab the search result html page soup with given dx_label, images_page.
     search_result_soup = getHtmlPageSoup(search_url_base, {'imagesPage': images_page, 'q': dx_label})
@@ -122,24 +138,29 @@ def parserSearchPage(dx_label, images_page):
         # Only add into result dict if it is a valid image url and diagnosis does match dx_label
         if re.search(dx_label, diagnosis, re.IGNORECASE) and validImageUrl(image_url):
             result_dict[data_image_id] = image_url
-    
     return result_dict
 
-# Parser case overview html page:
-# 1. Each case overview page can have multiple tag <div class="case-summary">
-# It contains tag <span data-image-id="5044bfd1c97267166cd67486" class="image-rating">2</span>
-# and list infomations for this image, i.e. Patient case no. Patient details, etc.
-# For our task, diagnosis (dx_label) and Primary Lesions are the infomations we needed.
-# 
-# 2. We search the given data_image_id's case-summary here. 
-# However, We can improve the script here to reduce the total get call requesting case overview page
-# by parser all images in the case overview page.
-# One thing to note, all images in this case overview page could have other diagnosis result (dx_label). 
-# i.e. https://www.dermquest.com/image-library/image/5044bfd1c97267166cd6703f 
-# So it is needed to validate diagnosis again when we gather lesions infomation for given image.
-# Mark this as TODO 
 def parserCaseOverviewPage(dx_label, data_image_id, image_url):
+    """
+    Parser case overview html page:
+    1. Each case overview page can have multiple tag <div class="case-summary">
+    It contains tag <span data-image-id="5044bfd1c97267166cd67486" class="image-rating">2</span>
+    and list infomations for this image, i.e. Patient case no. Patient details, etc.
+    For our task, diagnosis (dx_label) and Primary Lesions are the infomations we needed.
 
+    2. We search the given data_image_id's case-summary here.
+    However, We can improve the script here to reduce the total get call requesting case overview page
+    by parser all images in the case overview page.
+    One thing to note, all images in this case overview page could have other diagnosis result (dx_label).
+    i.e. https://www.dermquest.com/image-library/image/5044bfd1c97267166cd6703f
+    So it is needed to validate diagnosis again when we gather lesions infomation for given image.
+    Mark this as TODO
+
+    :param dx_label:
+    :param data_image_id:
+    :param image_url:
+    :return: Array of required valid data could be written into .csv file. None if diagnosis not match
+    """
     # Grab the case overview html page soup by given data_image_id. 
     case_overview_url =  summary_url_base + data_image_id
     case_overview_soup = getHtmlPageSoup(case_overview_url)
@@ -158,12 +179,12 @@ def parserCaseOverviewPage(dx_label, data_image_id, image_url):
     lesions_results = [lesion.text.strip().replace(',', ', ').replace(' / ', ', ') for lesion in lesions_results]
     lesions = ', '.join(lesions_results)
 
+    # Print some useful info in terminal, could manually debug with these info
     print("Case Overview URL: ", case_overview_url)
     print("Image URL: ", image_url)
     print("diagnosis: ", diagnosis)
     print("Primary Lesions: ", lesions)
     print()
-
     return [[image_url, dx_label, lesions]]
 
 if __name__ == '__main__':
