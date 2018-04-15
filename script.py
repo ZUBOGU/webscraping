@@ -15,6 +15,21 @@ import csv
 import requests
 import json
 import argparse
+import sys
+
+# Description of this scarping script logic
+# metadata_url and search_url_base are the key part When I finished this task
+# The dermquest website diagnosis searching is not working with url manipulation
+# (https://www.dermquest.com/image-library/image-search)
+# On the UI, we need to manually click and selected diagnosis.Then, click view images to see results.
+# So, I went with low level approach. Clicking view images actually fetches JSON data by using
+# metadata_url and search_url_base with url params. Then, transfer those information into website.
+# I fetched those JSON responses, parsed those data and returned row data I wanted.
+# Get metadata_url will have all lesions and diagnosis data (their id and text mapping)
+# The search_url_base are valid url to fetch search data. It takes url params(diagnosis id, page number
+# and number of image perPage). We can loop all results for given diagnosis id. 
+# It returns result with lesion ids, image file name.
+# i.e. (https://www.dermquest.com/Services/imageData.ashx?diagnosis=109493&page=1&perPage=128)
 
 metadata_url = "https://www.dermquest.com/Services/facetData.ashx"
 search_url_base = "https://www.dermquest.com/Services/imageData.ashx"
@@ -28,10 +43,11 @@ lesions_facets = {}
 def scrapData(limit, dx_labels, csv_file_name):
     """
     Scarp limit number of images data for given dx_labels.
-    Report the image_url, dx_label and lesion_label into file result.csv
+    Report the image_url, dx_label and lesion_label into csv_file_name
 
     :param limit: the required number of images for each diagnosis result
     :param dx_labels: the diagnosis results you want to scrap
+    :param csv_file_name: the csv file name you want to write into
     :return:
     """
     first_row = ['image_url', 'dx_label', 'lesion_label']
@@ -46,8 +62,13 @@ def scrapData(limit, dx_labels, csv_file_name):
     csv_file.close()
 
 def fetchAndParseMetadata():
-    file_name = "metadata.txt"
-    data = getPageData(metadata_url, file_name)
+    """
+    Help Function to fetch Metadata and update global variables
+    diagnoses_roots_dict, diagnoses_facets, lesions_facets with desired data
+
+    :return:
+    """
+    data = getPageData(metadata_url)
     parsed_json = json.loads(data)
 
     # Parse diagnoses facets, a dict with diagnosis id mapping to diagnosis text
@@ -76,6 +97,17 @@ def fetchAndParseMetadata():
                 lesions_facets[str(lesion_id)]['Text'] = text + " / " + sub_text
 
 def fetchAndParseRowsData(dx_label, limit):
+    """
+    Function to loop search url, parse the data and return the rows data with
+    valid image url, diagnosis label and all lesions labels.
+    If cannot find images with required limit number. Report as many as possible.
+    Print warning message
+
+
+    :param dx_label: given diagnosis label
+    :param limit: the required number of images for given dx_label
+    :return: The valid rows data that could write into csv file. [] if not found.
+    """
     dx_label_diagnosis_id = findDiagnosisId(dx_label)
     # return empty array if dx_label not exist
     if not dx_label_diagnosis_id:
@@ -88,15 +120,19 @@ def fetchAndParseRowsData(dx_label, limit):
     total_images = 0
     rows = []
     while count <= limit:
+        # Stop the while loop when we search all pages or have enough images
         if page > number_of_pages or count > limit:
             break
-        file_name = str(dx_label_diagnosis_id) + "_page" + str(page) + ".txt"     
-        data = getPageData(search_url_base, file_name, {'diagnosis': dx_label_diagnosis_id, 'page': page, 'perPage': 128})
+
+        # Get search results JSON data with given page id
+        data = getPageData(search_url_base, {'diagnosis': dx_label_diagnosis_id, 'page': page, 'perPage': 128})
         parsed_json = json.loads(data)
         total_images = parsed_json['Hits']
         number_of_pages = parsed_json['NumberOfPages']
         results= parsed_json['Results']
         page += 1
+
+        # Loop the result and parse the data
         for result in results:      
             if count > limit:
                 break            
@@ -104,6 +140,8 @@ def fetchAndParseRowsData(dx_label, limit):
             # Drop this result if no lesions
             if not lesions:
                 continue
+
+            # Use global variable lesions_facets to transfer lesion Ids to text string
             lesions_list = []
             for lesion in lesions:
                 lesion_id = lesion['Id']
@@ -112,34 +150,38 @@ def fetchAndParseRowsData(dx_label, limit):
             lesions_string = ", ".join(lesions_list)
             image_name = result['FileName']
             image_url = image_url_bases + image_name
+
+            # Only add this row if the image_url is valid
             if validateImageUrl(image_url):
                 rows.append([image_url, dx_label, lesions_string])
                 count += 1
+
+    # Provide warning message if total_images not matched required limit
     if (total_images < limit):
         print("Warning: total images number of diagnosis {0} is {1}, less than the required number {2}.".format(dx_label, total_images, limit))
         print("Please pick another diagnosis label and csv file name to meet your requirement")
     return rows
 
-def getPageData(url, file_name, urlParams={}):
+def getPageData(url, urlParams={}):
     """
     Help Function
+
     :param url: the url for get request call
     :param urlParams: Optional Param. url param to compose url
-    :return: BeautifulSoup Object for given html page
+    :return: text data for given page
     """
     try:
         r = requests.get(url, params=urlParams)
-        file = open(file_name, 'w')
-        file.write(r.text)
-        file.close()
         return r.text
     except requests.exceptions.RequestException as e:
         print(e)
-        return None
+        print("Please fix connection issue and try again")
+        sys.exit(1)
 
 def validateImageUrl(image_url):
     """
     Help Function
+
     :param image_url: the image url to validate
     :return: True if valid image url. Otherwise, false
     """
@@ -148,9 +190,17 @@ def validateImageUrl(image_url):
         return r.status_code == requests.codes.ok
     except requests.exceptions.RequestException as e:
         print(e)
-        return False
+        print("Please fix connection issue and try again")
+        sys.exit(1)
 
 def findDiagnosisId(dx_label):
+    """
+    Help method. Use global variables diagnoses_roots_dict and diagnoses_facets
+    to find the diagnosis id for given diagnosis label.
+
+    :param dx_label: diagnosis label
+    :return: diagnosis_id. None if not found
+    """
     first_char = dx_label[0].upper()
     list_diagnoses = diagnoses_roots_dict[first_char]
     for diagnosis_id in list_diagnoses:

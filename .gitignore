@@ -1,4 +1,5 @@
 .vscode
+.idea
 *.html
 *.txt
 .DS_Store
